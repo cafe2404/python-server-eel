@@ -3,12 +3,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status,exceptions as rest_exxeptions
 from account.models import Account
-from account.serializer import UserSerializer,UserLoginSerializer
+from account.serializer import UserSerializer,UserLoginSerializer,CookieTokenRefreshSerializer
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
-from rest_framework_simplejwt import tokens
+from rest_framework_simplejwt import tokens,exceptions as rest_exceptions,views as jwt_views
 from django.conf import settings
 from django.middleware import csrf
+
 
 def get_token(user):
     refresh = tokens.RefreshToken.for_user(user)
@@ -19,8 +20,7 @@ def get_token(user):
 class UserViewSet(viewsets.ModelViewSet):
     queryset = Account.objects.all()
     serializer_class = UserSerializer
-    
-    
+
     
 class UserLoginViewSet(APIView):
     permission_classes = [permissions.AllowAny,]
@@ -66,7 +66,6 @@ class UserLoginViewSet(APIView):
             detail = "Mật khẩu không được để trống"
         return Response({"detail":detail}, status=status.HTTP_400_BAD_REQUEST)
     
-    
 class UserRegisterViewSet(APIView):
     permission_classes = (permissions.AllowAny,)
     authentication_classes = ()
@@ -76,8 +75,50 @@ class UserRegisterViewSet(APIView):
         data = request.data
         serializer = UserSerializer(data=data)
         if serializer.is_valid():
-            print(serializer.validated_data)
             serializer.validated_data['password'] = make_password(serializer.validated_data['password'])
             user = serializer.save()
             return Response({"message":"Đăng ký thành công","email":user.email,"status":1},status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    
+class CookieTokenRefreshView(jwt_views.TokenRefreshView):
+    serializer_class = CookieTokenRefreshSerializer
+    def finalize_response(self, request, response, *args, **kwargs):
+        if response.data.get("refresh"):
+            response.set_cookie(
+                key=settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
+                value=response.data['refresh'],
+                expires=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'],
+                secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE'],
+                httponly=settings.SIMPLE_JWT['AUTH_COOKIE_HTTP_ONLY'],
+                samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE']
+            )
+            del response.data["refresh"]
+        response["X-CSRFToken"] = request.COOKIES.get("csrftoken")
+        return super().finalize_response(request, response, *args, **kwargs) 
+    
+class CurrentUserViewSet(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
+    
+class LogoutViewSet(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request, format=None):
+        try:
+            refreshToken = request.COOKIES.get(
+                settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            token = tokens.RefreshToken(refreshToken)
+            token.blacklist()
+            res = Response()
+            res.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
+            res.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            res.delete_cookie("X-CSRFToken")
+            res.delete_cookie("csrftoken")
+            res["X-CSRFToken"]=None
+            logout(request)
+            return res
+        except Exception as e:
+            print(e)
+            raise rest_exceptions.InvalidToken("Invalid token")
