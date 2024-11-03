@@ -14,8 +14,8 @@ from django.middleware import csrf
 def get_token(user):
     refresh = tokens.RefreshToken.for_user(user)
     return {
-        'refresh': str(refresh),
-        'access': str(refresh.access_token),
+        'refreshToken': str(refresh),
+        'accessToken': str(refresh.access_token),
     }
 class UserViewSet(viewsets.ModelViewSet):
     queryset = Account.objects.all()
@@ -40,7 +40,7 @@ class UserLoginViewSet(APIView):
                 res = Response()
                 res.set_cookie(
                     key =  settings.SIMPLE_JWT['AUTH_COOKIE'],
-                    value = tokens['access'],
+                    value = tokens['accessToken'],
                     expires=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'],
                     httponly=settings.SIMPLE_JWT['AUTH_COOKIE_HTTP_ONLY'],
                     samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
@@ -48,7 +48,7 @@ class UserLoginViewSet(APIView):
                 )
                 res.set_cookie(
                     key=settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
-                    value=tokens["refresh"],
+                    value=tokens["refreshToken"],
                     expires=settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'],
                     secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE'],
                     httponly=settings.SIMPLE_JWT['AUTH_COOKIE_HTTP_ONLY'],
@@ -100,7 +100,7 @@ class CookieTokenRefreshView(jwt_views.TokenRefreshView):
 class CurrentUserViewSet(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
-        serializer = UserSerializer(request.user)
+        serializer = UserSerializer(request.user, context={'request': request})
         return Response(serializer.data)
     
 class LogoutViewSet(APIView):
@@ -117,7 +117,6 @@ class LogoutViewSet(APIView):
             res.delete_cookie("X-CSRFToken")
             res.delete_cookie("csrftoken")
             res["X-CSRFToken"]=None
-            logout(request)
             return res
         except Exception as e:
             print(e)
