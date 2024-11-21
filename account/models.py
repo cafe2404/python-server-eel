@@ -23,6 +23,8 @@ class Account(AbstractUser):
     email = models.EmailField(unique=True)
     username = models.CharField(max_length=100, blank=True,null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True)
+    mac_address = models.CharField(max_length=17,null=True,blank=True)  # Địa chỉ MAC có độ dài cố định là 17 ký tự
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
     objects = CustomUserManager()

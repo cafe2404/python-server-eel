@@ -9,7 +9,7 @@ urlpatterns = [
     path(r'login', views.UserLoginViewSet.as_view(), name='login'),
     path(r'register', views.UserRegisterViewSet.as_view(), name='register'),
     path('refresh-token', views.CookieTokenRefreshView.as_view(),name='refresh'),
-    path('users/me', views.CurrentUserViewSet.as_view(), name='current-user'),
+    path('me', views.CurrentUserViewSet.as_view(), name='current-user'),
     path('logout', views.LogoutViewSet.as_view(), name='logout'),
 ]
 

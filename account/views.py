@@ -9,6 +9,7 @@ from django.contrib.auth.hashers import make_password
 from rest_framework_simplejwt import tokens,exceptions as rest_exceptions,views as jwt_views
 from django.conf import settings
 from django.middleware import csrf
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 
 def get_token(user):
@@ -25,8 +26,7 @@ class UserViewSet(viewsets.ModelViewSet):
 class UserLoginViewSet(APIView):
     permission_classes = [permissions.AllowAny,]
     authentication_classes = ()
-    def get(self,request):
-        return Response({"message":"Method GET not allowed.","status":0},status=status.HTTP_400_BAD_REQUEST)
+
     def post(self, request):
         serializer = UserLoginSerializer(data=request.data)
         if serializer.is_valid():
@@ -36,11 +36,25 @@ class UserLoginViewSet(APIView):
                 password=serializer.validated_data['password'],
             )
             if user:
+                # Lấy MAC address từ client
+                mac_address = request.data.get("mac_address", None)
+                if not mac_address:
+                    return Response({"detail": "Thiếu địa chỉ MAC"}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Kiểm tra xem tài khoản đã được sử dụng trên thiết bị khác chưa
+                if user.mac_address and user.mac_address != mac_address:
+                    return Response({"detail": "Tài khoản này đã được sử dụng trên một thiết bị khác."},
+                                    status=status.HTTP_403_FORBIDDEN)
+                # Lưu MAC address vào tài khoản
+                user.mac_address = mac_address
+                user.save()
+
+                # Tạo token và trả về
                 tokens = get_token(user)
                 res = Response()
                 res.set_cookie(
-                    key =  settings.SIMPLE_JWT['AUTH_COOKIE'],
-                    value = tokens['accessToken'],
+                    key=settings.SIMPLE_JWT['AUTH_COOKIE'],
+                    value=tokens['accessToken'],
                     expires=settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'],
                     httponly=settings.SIMPLE_JWT['AUTH_COOKIE_HTTP_ONLY'],
                     samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE'],
@@ -61,10 +75,10 @@ class UserLoginViewSet(APIView):
                 raise rest_exxeptions.AuthenticationFailed("Tài khoản hoặc mật khẩu không đúng")
 
         if serializer.errors.get("email"):
-            detail = "Email không đng định dạng"
+            detail = "Email không đúng định dạng"
         elif serializer.errors.get("password"):
             detail = "Mật khẩu không được để trống"
-        return Response({"detail":detail}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
     
 class UserRegisterViewSet(APIView):
     permission_classes = (permissions.AllowAny,)
@@ -83,8 +97,10 @@ class UserRegisterViewSet(APIView):
     
 class CookieTokenRefreshView(jwt_views.TokenRefreshView):
     serializer_class = CookieTokenRefreshSerializer
+
     def finalize_response(self, request, response, *args, **kwargs):
-        if response.data.get("refresh"):
+        # Nếu refresh token thành công
+        if response.status_code == 200 and response.data.get("refresh"):
             response.set_cookie(
                 key=settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
                 value=response.data['refresh'],
@@ -94,8 +110,22 @@ class CookieTokenRefreshView(jwt_views.TokenRefreshView):
                 samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE']
             )
             del response.data["refresh"]
-        response["X-CSRFToken"] = request.COOKIES.get("csrftoken")
-        return super().finalize_response(request, response, *args, **kwargs) 
+            response["X-CSRFToken"] = request.COOKIES.get("csrftoken")
+
+        # Nếu refresh token không hợp lệ hoặc hết hạn
+        elif response.status_code == 401:
+            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+
+        return super().finalize_response(request, response, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        try:
+            return super().post(request, *args, **kwargs)
+        except (TokenError, InvalidToken) as e:
+            # Nếu token không hợp lệ, trả về 401 và xóa cookie
+            response = Response({"detail": "Invalid or expired token."}, status=401)
+            response.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            return response
     
 class CurrentUserViewSet(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -105,18 +135,23 @@ class CurrentUserViewSet(APIView):
     
 class LogoutViewSet(APIView):
     permission_classes = [permissions.IsAuthenticated]
+
     def post(self, request, format=None):
         try:
-            refreshToken = request.COOKIES.get(
-                settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
+            refreshToken = request.COOKIES.get(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
             token = tokens.RefreshToken(refreshToken)
             token.blacklist()
+
+            # Xóa MAC address của tài khoản
+            request.user.mac_address = None
+            request.user.save()
+
             res = Response()
             res.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE'])
             res.delete_cookie(settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'])
             res.delete_cookie("X-CSRFToken")
             res.delete_cookie("csrftoken")
-            res["X-CSRFToken"]=None
+            res["X-CSRFToken"] = None
             return res
         except Exception as e:
             print(e)
